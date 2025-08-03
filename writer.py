@@ -78,8 +78,8 @@ def newsapi_headlines():
         print(f"Raw response: {response.text if 'response' in locals() else 'No response object'}")
 
 def nytimes_headlines():
-    urlus = f"https://api.nytimes.com/svc/topstories/v2/us.json?api-key={NYTIMES_API_KEY}"
-    urlhome = f"https://api.nytimes.com/svc/topstories/v2/home.json?api-key={NYTIMES_API_KEY}"
+    url_us = f"https://api.nytimes.com/svc/topstories/v2/us.json?api-key={NYTIMES_API_KEY}"
+    url_home = f"https://api.nytimes.com/svc/topstories/v2/home.json?api-key={NYTIMES_API_KEY}"
     ny_articles = []
     
     try:
@@ -89,7 +89,6 @@ def nytimes_headlines():
         
         if 'results' in data_us:
             ny_articles.extend(data_us['results'])
-            print(f"Added {len(data_us['results'])} articles from US.")
         else:
             print("US news response has no 'results' key.")
 
@@ -99,7 +98,6 @@ def nytimes_headlines():
 
         if 'results' in data_home:
             ny_articles.extend(data_home['results'])
-            print(f"Added {len(data_home['results'])} articles from Home.")
         else:
             print("Home news response has no 'results' key.")
       
@@ -148,3 +146,11 @@ def weather():
         print(f"An unexpected error occurred: {err}")
         return None
     
+# Script the audio
+response = client.models.generate_content(
+    model="gemini-2.5-flash",
+    contents=f"You are going to create a script for a news podcast. It should be about 5-10 minutes long(so pretty lenghty). It should be very interesting for the audience. It should be very engaging and fun to listen to. It should be very informative and educational. It should be very well structured and organized. It should be very well written and polished. It should be very well researched and fact-checked from multiple sources. It should be very well presented and delivered. It should be very well produced and edited. Now I have gathered sources and headlines for you to use to make it current. These are a base for you to know what is going on, but you are responsible for actually writing the script. You can use the sources to get more information and details, but you should not copy and paste them. You should use them as a reference and inspiration. You should also use your own knowledge and creativity to make it unique and original. Here is the first source. It is from GNews API: {gnews_headlines()}. Here is the second source. It is from NewsAPI: {newsapi_headlines()}. Here is the third source. It is from New York Times API: {nytimes_headlines()}. Here is the fourth source. It is from Alpha Vantage API for buisness and trading news(you should focus on this slightly less): {alpha_vantage_headlines()}. Here is the fifth source. It is from Weather API(This is the current weather in my area. Just mention it once and be done): {weather()}. Focus on the first 3 sources. Now you can start writing the script. Remember to make it very interesting, engaging, fun, informative, educational, well structured, organized, well written, polished, well researched, fact-checked, presented, delivered, produced and edited.",
+)
+
+script = response.text
+print(script)
