@@ -6,6 +6,7 @@ import re
 import os
 import base64
 from dotenv import load_dotenv, find_dotenv
+from werkzeug.exceptions import HTTPException
 
 from google import genai
 from google.genai import types
@@ -14,14 +15,14 @@ from writer import generate_podcast_script
 
 app = Flask(__name__)
 
-# Load .env
+# Load environment variables
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path, override=True)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("WARNING: GEMINI_API_KEY not set; TTS will fail.")
+    print("WARNING: GEMINI_API_KEY not configured; TTS will fail.")
 tts_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
@@ -49,7 +50,7 @@ def generate_podcast():
     if not GEMINI_API_KEY:
         return error_json("GEMINI_API_KEY not configured.", 500)
 
-    # 1) Create the script
+    # 1) Generate the script
     script = generate_podcast_script()
     if script.startswith("Error"):
         return error_json(script, 500)
@@ -66,7 +67,7 @@ def generate_podcast():
                 speech_config=types.SpeechConfig(
                     voice_config=types.VoiceConfig(
                         prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                            voice_name="Fenrir"
+                            voice_name="Kore"
                         )
                     )
                 ),
@@ -75,10 +76,10 @@ def generate_podcast():
     except Exception as e:
         return error_json(f"TTS call failed: {e}", 500)
 
-    # 3) Extract & base64-decode the PCM
+    # 3) Extract & base64-decode PCM
     try:
         part = response.candidates[0].content.parts[0].inline_data
-        b64 = part.data              # a base64-encoded str
+        b64 = part.data              # base64-encoded string
         mime = part.mime_type        # e.g. "audio/pcm;rate=24000"
     except Exception:
         return error_json("TTS response missing audio data.", 500)
@@ -91,15 +92,24 @@ def generate_podcast():
     if len(pcm_bytes) < 2000:
         return error_json("Audio data too short.", 500)
 
-    # 4) Parse sample rate
+    # 4) Determine sample rate
     m = re.search(r"rate=(\d+)", mime or "")
     rate = int(m.group(1)) if m else 24000
 
     # 5) Wrap PCM in WAV
     wav_data = wav_bytes_from_pcm(pcm_bytes, rate)
 
-    # 6) Stream WAV
+    # 6) Stream WAV back to the browser
     return Response(wav_data, mimetype="audio/wav")
 
+
+@app.errorhandler(Exception)
+def handle_all_errors(e):
+    """Return JSON for any unhandled exceptions."""
+    code = e.code if isinstance(e, HTTPException) else 500
+    return jsonify({"error": str(e)}), code
+
+
 if __name__ == "__main__":
+    # In production, DEBUG is False; our error handler ensures JSON responses.
     app.run(debug=True)
