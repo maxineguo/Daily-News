@@ -3,7 +3,11 @@ import json
 import urllib.request
 import os
 import requests
+import logging
 from datetime import datetime
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 def get_api_key():
     """Get Gemini API key with better error handling"""
@@ -12,38 +16,50 @@ def get_api_key():
         dotenv_path = find_dotenv()
         if dotenv_path:
             load_dotenv(dotenv_path, override=True)
+            logger.info(f"Loaded environment from: {dotenv_path}")
     except ImportError:
-        print("Warning: python-dotenv not available, using environment variables only")
+        logger.warning("python-dotenv not available, using environment variables only")
     except Exception as e:
-        print(f"Warning: Error loading .env file: {e}")
+        logger.warning(f"Error loading .env file: {e}")
     
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         raise ValueError("GEMINI_API_KEY not found in environment variables.")
+    
+    logger.info(f"GEMINI_API_KEY found (length: {len(gemini_api_key)})")
     return gemini_api_key
 
 def gnews_headlines():
     """Fetch GNews headlines with error handling"""
     gnews_api_key = os.getenv("GNEWS_API_KEY")
     if not gnews_api_key:
-        print("WARNING: GNEWS_API_KEY not found.")
+        logger.warning("GNEWS_API_KEY not found.")
         return []
     
     category = "general"
     url = f"https://gnews.io/api/v4/top-headlines?category={category}&lang=en&country=us&max=10&apikey={gnews_api_key}"
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        logger.info("Fetching GNews headlines...")
+        with urllib.request.urlopen(url, timeout=15) as response:
             data = json.loads(response.read().decode("utf-8"))
-            return data.get("articles", [])
+            articles = data.get("articles", [])
+            logger.info(f"GNews: Retrieved {len(articles)} articles")
+            return articles
+    except urllib.error.HTTPError as e:
+        logger.error(f"GNews HTTP error {e.code}: {e.reason}")
+        return []
+    except urllib.error.URLError as e:
+        logger.error(f"GNews URL error: {e.reason}")
+        return []
     except Exception as e:
-        print(f"Error fetching GNews headlines: {e}")
+        logger.error(f"Error fetching GNews headlines: {e}")
         return []
 
 def newsapi_headlines():
     """Fetch NewsAPI headlines with error handling"""
     newsapi_api_key = os.getenv("NEWSAPI_API_KEY")
     if not newsapi_api_key:
-        print("WARNING: NEWSAPI_API_KEY not found.")
+        logger.warning("NEWSAPI_API_KEY not found.")
         return []
 
     newsapi_url = (f'https://newsapi.org/v2/top-headlines?'
@@ -51,52 +67,73 @@ def newsapi_headlines():
                    f'pageSize=10&'
                    f'apiKey={newsapi_api_key}')
     try:
-        response = requests.get(newsapi_url, timeout=10)
+        logger.info("Fetching NewsAPI headlines...")
+        response = requests.get(newsapi_url, timeout=15)
         response.raise_for_status()
         news_data = response.json()
         if news_data.get('status') == 'ok':
-            return news_data.get('articles', [])
+            articles = news_data.get('articles', [])
+            logger.info(f"NewsAPI: Retrieved {len(articles)} articles")
+            return articles
         else:
-            print(f"NewsAPI error: {news_data.get('message', 'Unknown error')}")
+            logger.error(f"NewsAPI error: {news_data.get('message', 'Unknown error')}")
             return []
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"NewsAPI HTTP error {e.response.status_code}: {e.response.reason}")
+        return []
     except requests.exceptions.RequestException as e:
-        print(f"Error fetching NewsAPI articles: {e}")
+        logger.error(f"Error fetching NewsAPI articles: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected NewsAPI error: {e}")
         return []
 
 def nytimes_headlines():
     """Fetch NYTimes headlines with error handling"""
     nytimes_api_key = os.getenv("NYTIMES_API_KEY")
     if not nytimes_api_key:
-        print("WARNING: NYTIMES_API_KEY not found.")
+        logger.warning("NYTIMES_API_KEY not found.")
         return []
 
     url_us = f"https://api.nytimes.com/svc/topstories/v2/us.json?api-key={nytimes_api_key}"
     try:
-        response_us = requests.get(url_us, timeout=10)
+        logger.info("Fetching NYTimes headlines...")
+        response_us = requests.get(url_us, timeout=15)
         response_us.raise_for_status()
         data_us = response_us.json()
-        return data_us.get('results', [])
+        articles = data_us.get('results', [])
+        logger.info(f"NYTimes: Retrieved {len(articles)} articles")
+        return articles
     except requests.exceptions.HTTPError as err:
-        print(f"NYTimes HTTP error: {err}")
+        logger.error(f"NYTimes HTTP error {err.response.status_code}: {err.response.reason}")
+        return []
+    except requests.exceptions.RequestException as err:
+        logger.error(f"NYTimes request error: {err}")
         return []
     except Exception as err:
-        print(f"NYTimes error: {err}")
+        logger.error(f"Unexpected NYTimes error: {err}")
         return []
 
 def alpha_vantage_headlines():
     """Fetch Alpha Vantage headlines with error handling"""
     alpha_vantage_api_key = os.getenv("ALPHA_VANTAGE_API_KEY")
     if not alpha_vantage_api_key:
-        print("WARNING: ALPHA_VANTAGE_API_KEY not found.")
+        logger.warning("ALPHA_VANTAGE_API_KEY not found.")
         return {}
 
     url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&limit=10&sort=RELEVANCE&apikey={alpha_vantage_api_key}"
     try:
-        r = requests.get(url, timeout=10)
+        logger.info("Fetching Alpha Vantage headlines...")
+        r = requests.get(url, timeout=15)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        logger.info("Alpha Vantage: Data retrieved successfully")
+        return data
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Alpha Vantage request error: {e}")
+        return {}
     except Exception as e:
-        print(f"Alpha Vantage error: {e}")
+        logger.error(f"Alpha Vantage error: {e}")
         return {}
 
 def weather():
@@ -105,11 +142,11 @@ def weather():
     weather_position = os.getenv("WEATHER_POSITION")
     
     if not weather_api_key:
-        print("WARNING: WEATHER_API_KEY not found.")
+        logger.warning("WEATHER_API_KEY not found.")
         return {}
 
     if not weather_position:
-        print("WARNING: WEATHER_POSITION not found. Defaulting to San Francisco.")
+        logger.warning("WEATHER_POSITION not found. Defaulting to San Francisco.")
         weather_position = "37.7749,-122.4194"
     
     api_method = 'forecast'
@@ -118,64 +155,120 @@ def weather():
     url = f"{base_url}/{api_method}.json?key={weather_api_key}&q={weather_position}&days={days}&aqi=no&alerts=yes"
     
     try:
-        response = requests.get(url, timeout=10)
+        logger.info("Fetching weather data...")
+        response = requests.get(url, timeout=15)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        logger.info("Weather: Data retrieved successfully")
+        return data
     except requests.exceptions.RequestException as err:
-        print(f"Weather API error: {err}")
+        logger.error(f"Weather API request error: {err}")
+        return {}
+    except Exception as err:
+        logger.error(f"Weather API error: {err}")
         return {}
 
 def generate_podcast_script():
     """Generate podcast script with comprehensive error handling"""
+    logger.info("Starting podcast script generation...")
+    
     try:
         # Import here to catch import errors
         import google.generativeai as genai
+        logger.info("google.generativeai imported successfully")
     except ImportError as e:
-        return f"Error: Failed to import google.generativeai: {str(e)}"
+        error_msg = f"Error: Failed to import google.generativeai: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
     
     try:
         gemini_api_key = get_api_key()
         genai.configure(api_key=gemini_api_key)
         client = genai.GenerativeModel("gemini-2.5-flash")
+        logger.info("Gemini client initialized successfully")
     except ValueError as e:
-        return f"Error: {e}"
+        error_msg = f"Error: {e}"
+        logger.error(error_msg)
+        return error_msg
     except Exception as e:
-        return f"Error initializing Gemini client: {str(e)}"
+        error_msg = f"Error initializing Gemini client: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
 
     try:
-        print("Fetching news data...")
+        logger.info("Fetching news data from all sources...")
         gnews_data = gnews_headlines()
         newsapi_data = newsapi_headlines()
         nytimes_data = nytimes_headlines()
         alpha_vantage_data = alpha_vantage_headlines()
         weather_data = weather()
         
-        print(f"Data fetched - GNews: {len(gnews_data)}, NewsAPI: {len(newsapi_data)}, NYTimes: {len(nytimes_data)}")
+        logger.info(f"Data fetched - GNews: {len(gnews_data)}, NewsAPI: {len(newsapi_data)}, NYTimes: {len(nytimes_data)}, Alpha Vantage: {'yes' if alpha_vantage_data else 'no'}, Weather: {'yes' if weather_data else 'no'}")
 
         now = datetime.now()
+        current_date = now.strftime("%B %d, %Y")
         
         if not any([gnews_data, newsapi_data, nytimes_data]):
+            logger.warning("No news data available, generating fallback content")
             script_prompt = (
-                "You are a news podcast host. Unfortunately, we're having technical difficulties "
-                "with our news feeds. Please generate a fun, engaging, and informative general interest "
-                "segment about a recent scientific discovery or a historical event that happened this week. "
-                "The segment should be about 5-7 minutes long when spoken and be broken into at least 3 "
-                "paragraphs to provide a good listening experience for our audience. Make it conversational "
-                "and engaging, as if you're talking directly to the listener."
+                "You are a professional news podcast host. Unfortunately, we're experiencing technical difficulties "
+                "with our news feeds today. Please generate an engaging, informative segment about a significant "
+                "recent scientific discovery or important historical event that happened this week in history. "
+                "The segment should be conversational, about 5-7 minutes when spoken, and broken into clear "
+                "sections for good listening flow. Make it engaging as if you're talking directly to the listener. "
+                f"Today is {current_date}. DO NOT mention technical difficulties or missing news feeds in your script."
             )
         else:
-            script_prompt = f"You are going to create a script for a news podcast. It should be about 7-15 minutes long(so pretty lenghty). It should be very interesting for the audience. It should be very engaging and fun to listen to. It should be very informative and educational. It should be very well structured and organized. It should be very well written and polished. It should be very well researched and fact-checked from multiple sources. It should be very well presented and delivered. It should be very well produced and edited. Now I have gathered sources and headlines for you to use to make it current. These are a base for you to know what is going on, but you are responsible for actually writing the script. You can use the sources to get more information and details, but you should not copy and paste them. You should use them as a reference and inspiration. You should also use your own knowledge and creativity to make it unique and original. Here is the first source. It is from GNews API: {gnews_headlines()}. Here is the second source. It is from NewsAPI: {newsapi_headlines()}. Here is the third source. It is from New York Times API: {nytimes_headlines()}. Here is the fourth source. It is from Alpha Vantage API for buisness and trading news(you should focus on this slightly less): {alpha_vantage_headlines()}. Here is the fifth source. It is from Weather API(This is the current weather in my area. Just mention it once and be done): {weather()}. Focus on the first 3 sources. Now you can start writing the script. Remember to make it very interesting, engaging, fun, informative, educational, well structured, organized, well written, polished, well researched, fact-checked, presented, delivered, produced and edited. Remember, today is {now.strftime("%d-%m-%Y")}(date, month, year) so don't assume stuff based on out-dated data or use old sources. Don't repeat information twice even if you see them multiple times in different sources. Make sure it is VERY interesting and fun to listen to. Try to provide as much information as possible but make it detailed - that means make it long. Also, JUST PROVIDE THE SCRIPT. Do not add any extra text or comments. Don't add spaces for sound effects, etc. Focus on the first three sources. Now, write the script. JUST PROVIDE THE SCRIPT. Do not add any extra text or comments. Don't add spaces for sound effects, etc. Do not add stuff like '(SHORT TRANSITION SOUND)' or anything else that is similar. Also, don't name who is talking(ex: host). Also, if you are going to same 'hostname', make up a name. DO NOT just write hostname. This script is going to be directly read so ensure it is properly formatted. DO NOT talk about the intro or outro ONLY THE TEXT OF THE SCRIPT!!!!!! Make it sound natural and conversational."
-        
-        print("Generating script with Gemini...")
-        response = client.generate_content(script_prompt)
+            logger.info("Generating script with available news data")
+            script_prompt = f"""You are creating a script for a professional news podcast broadcast. The script should be engaging, informative, and about 7-12 minutes when spoken aloud.
+
+IMPORTANT GUIDELINES:
+- Write ONLY the script content that will be read aloud
+- Do NOT include any stage directions, sound effect notes, or production notes
+- Make it conversational and engaging, as if speaking directly to listeners
+- Structure with clear transitions between topics
+- Focus primarily on the most significant and interesting stories
+- Today is {current_date}
+
+NEWS SOURCES AVAILABLE:
+1. GNews Headlines: {json.dumps(gnews_data[:5]) if gnews_data else 'No data available'}
+2. NewsAPI Headlines: {json.dumps(newsapi_data[:5]) if newsapi_data else 'No data available'}  
+3. New York Times: {json.dumps(nytimes_data[:5]) if nytimes_data else 'No data available'}
+4. Business/Finance (Alpha Vantage): {json.dumps(alpha_vantage_data) if alpha_vantage_data else 'No data available'}
+5. Weather: {json.dumps(weather_data) if weather_data else 'No data available'}
+
+Create an engaging, well-structured news broadcast script. Focus on the most newsworthy stories, provide context and analysis, and maintain a professional yet conversational tone throughout. The script should flow naturally from one topic to the next."""
+
+        logger.info("Sending request to Gemini...")
+        response = client.generate_content(
+            script_prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.7,
+                max_output_tokens=4000,
+            )
+        )
         
         if response and response.text:
-            print(f"Script generated successfully, length: {len(response.text)}")
-            return response.text
+            script = response.text.strip()
+            logger.info(f"Script generated successfully, length: {len(script)} characters")
+            
+            # Validate script quality
+            if len(script) < 100:
+                error_msg = "Generated script is too short"
+                logger.error(error_msg)
+                return error_msg
+            
+            # Remove any unwanted formatting
+            script = script.replace("**", "").replace("*", "")
+            
+            return script
         else:
-            return "Error: Empty response from Gemini"
+            error_msg = "Error: Empty response from Gemini"
+            logger.error(error_msg)
+            return error_msg
             
     except Exception as e:
         error_msg = f"Error generating script: {str(e)}"
-        print(error_msg)
+        logger.error(error_msg)
+        logger.error(f"Full traceback: ", exc_info=True)
         return error_msg
