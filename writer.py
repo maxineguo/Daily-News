@@ -1,6 +1,7 @@
 # writer.py
 import json
 import urllib.request
+# Corrected import statement
 import google.generativeai as genai
 import os
 from dotenv import load_dotenv, find_dotenv
@@ -138,7 +139,7 @@ def generate_podcast_script():
              )
         else:
              script_prompt = script_prompt = f"You are going to create a script for a news podcast. It should be about 7-15 minutes long(so pretty lenghty). It should be very interesting for the audience. It should be very engaging and fun to listen to. It should be very informative and educational. It should be very well structured and organized. It should be very well written and polished. It should be very well researched and fact-checked from multiple sources. It should be very well presented and delivered. It should be very well produced and edited. Now I have gathered sources and headlines for you to use to make it current. These are a base for you to know what is going on, but you are responsible for actually writing the script. You can use the sources to get more information and details, but you should not copy and paste them. You should use them as a reference and inspiration. You should also use your own knowledge and creativity to make it unique and original. Here is the first source. It is from GNews API: {gnews_headlines()}. Here is the second source. It is from NewsAPI: {newsapi_headlines()}. Here is the third source. It is from New York Times API: {nytimes_headlines()}. Here is the fourth source. It is from Alpha Vantage API for buisness and trading news(you should focus on this slightly less): {alpha_vantage_headlines()}. Here is the fifth source. It is from Weather API(This is the current weather in my area. Just mention it once and be done): {weather()}. Focus on the first 3 sources. Now you can start writing the script. Remember to make it very interesting, engaging, fun, informative, educational, well structured, organized, well written, polished, well researched, fact-checked, presented, delivered, produced and edited. Remember, today is {now.strftime("%d-%m-%Y")}(date, month, year) so don't assume stuff based on out-dated data or use old sources. Don't repeat information twice even if you see them multiple times in different sources. Make sure it is VERY interesting and fun to listen to. Try to provide as much information as possible but make it detailed - that means make it long. Also, JUST PROVIDE THE SCRIPT. Do not add any extra text or comments. Don't add spaces for sound effects, etc. Focus on the first three sources. Now, write the script. JUST PROVIDE THE SCRIPT. Do not add any extra text or comments. Don't add spaces for sound effects, etc. Do not add stuff like '(SHORT TRANSITION SOUND)' or anything else that is similar. Also, don't name who is talking(ex: host). Also, if you are going to same 'hostname', make up a name. DO NOT just write hostname. This script is going to be directly read so ensure it is properly formatted. DO NOT talk about the intro or outro music ONLY THE TEXT OF THE SCRIPT!!!!!!"
-
+        
         response = client.generate_content(script_prompt)
         return response.text
     except Exception as e:
