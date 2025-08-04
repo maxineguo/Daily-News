@@ -14,24 +14,25 @@ from writer import generate_podcast_script
 
 app = Flask(__name__)
 
-# Load environment variables
+# Load .env
 dotenv_path = find_dotenv()
 if dotenv_path:
     load_dotenv(dotenv_path, override=True)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    print("WARNING: GEMINI_API_KEY not found. TTS will fail.")
+    print("WARNING: GEMINI_API_KEY not set; TTS will fail.")
 tts_client = genai.Client(api_key=GEMINI_API_KEY)
 
 
-def wave_bytes(pcm_bytes: bytes, rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
+def wav_bytes_from_pcm(pcm: bytes, rate: int, channels: int = 1, sample_width: int = 2) -> bytes:
+    """Convert raw PCM bytes into a WAV container (in-memory)."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(channels)
         wf.setsampwidth(sample_width)
         wf.setframerate(rate)
-        wf.writeframes(pcm_bytes)
+        wf.writeframes(pcm)
     return buf.getvalue()
 
 
@@ -42,16 +43,20 @@ def index():
 
 @app.route("/generate_podcast", methods=["GET"])
 def generate_podcast():
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "GEMINI_API_KEY not configured."}), 500
+    def error_json(msg, code=500):
+        return jsonify({"error": msg}), code
 
+    if not GEMINI_API_KEY:
+        return error_json("GEMINI_API_KEY not configured.", 500)
+
+    # 1) Create the script
     script = generate_podcast_script()
     if script.startswith("Error"):
-        return jsonify({"error": script}), 500
-    
+        return error_json(script, 500)
     if len(script.strip()) < 50:
-        return jsonify({"error": "Script too short to generate audio."}), 500
+        return error_json("Script too short to generate audio.", 500)
 
+    # 2) Call Gemini TTS
     try:
         response = tts_client.models.generate_content(
             model="gemini-2.5-flash-preview-tts",
@@ -67,30 +72,34 @@ def generate_podcast():
                 ),
             ),
         )
-
-        part = response.candidates[0].content.parts[0].inline_data
-        base64_data = part.data
-        mime_type = part.mime_type
-
-        raw_pcm = base64.b64decode(base64_data)
-
-        if not raw_pcm or len(raw_pcm) < 2000:
-            return jsonify({"error": "Audio generation returned empty or too-short data."}), 500
-
-        # 4) Parse sample rate from mime_type
-        m = re.search(r"rate=(\d+)", mime_type or "")
-        rate = int(m.group(1)) if m else 24000
-
-        # 5) Convert PCM to WAV bytes
-        wav_data = wave_bytes(raw_pcm, rate)
-
-        # 6) Stream the WAV back to the browser
-        return Response(wav_data, mimetype="audio/wav")
-
     except Exception as e:
-        app.logger.error("TTS error", exc_info=True)
-        return jsonify({"error": f"TTS generation failed: {e}"}), 500
+        return error_json(f"TTS call failed: {e}", 500)
 
+    # 3) Extract & base64-decode the PCM
+    try:
+        part = response.candidates[0].content.parts[0].inline_data
+        b64 = part.data              # a base64-encoded str
+        mime = part.mime_type        # e.g. "audio/pcm;rate=24000"
+    except Exception:
+        return error_json("TTS response missing audio data.", 500)
+
+    try:
+        pcm_bytes = base64.b64decode(b64)
+    except Exception as e:
+        return error_json(f"Base64 decode failed: {e}", 500)
+
+    if len(pcm_bytes) < 2000:
+        return error_json("Audio data too short.", 500)
+
+    # 4) Parse sample rate
+    m = re.search(r"rate=(\d+)", mime or "")
+    rate = int(m.group(1)) if m else 24000
+
+    # 5) Wrap PCM in WAV
+    wav_data = wav_bytes_from_pcm(pcm_bytes, rate)
+
+    # 6) Stream WAV
+    return Response(wav_data, mimetype="audio/wav")
 
 if __name__ == "__main__":
     app.run(debug=True)
