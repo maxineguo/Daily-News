@@ -21,6 +21,14 @@
         <button id="generate-button" class="w-full bg-blue-600 text-white font-bold py-4 px-8 rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all duration-300 transform hover:scale-105">
             Generate Broadcast
         </button>
+        
+        <button id="health-button" class="w-full mt-4 bg-gray-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-500 transition-all duration-300">
+            Check System Status
+        </button>
+        
+        <button id="test-button" class="w-full mt-2 bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition-all duration-300">
+            Test Basic Connection
+        </button>
 
         <div id="loading-indicator" class="mt-8 hidden">
             <div class="loading-spinner animate-spin inline-block w-12 h-12 border-4 rounded-full" role="status"></div>
@@ -36,40 +44,138 @@
             <p class="font-bold">Error:</p>
             <p id="error-text"></p>
         </div>
+        
+        <div id="health-status" class="mt-8 hidden p-4 border rounded-lg text-left">
+            <p class="font-bold">System Status:</p>
+            <pre id="health-text" class="text-sm mt-2"></pre>
+        </div>
     </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const generateButton = document.getElementById('generate-button');
+            const healthButton = document.getElementById('health-button');
+            const testButton = document.getElementById('test-button');
             const loadingIndicator = document.getElementById('loading-indicator');
             const playerContainer = document.getElementById('player-container');
             const audioPlayer = document.getElementById('audio-player');
             const errorMessage = document.getElementById('error-message');
             const errorText = document.getElementById('error-text');
+            const healthStatus = document.getElementById('health-status');
+            const healthText = document.getElementById('health-text');
 
-            generateButton.addEventListener('click', async () => {
-                loadingIndicator.classList.remove('hidden');
+            function hideAllMessages() {
+                loadingIndicator.classList.add('hidden');
                 playerContainer.classList.add('hidden');
                 errorMessage.classList.add('hidden');
+                healthStatus.classList.add('hidden');
                 audioPlayer.src = '';
+            }
+
+            function showError(message) {
+                console.error('Error:', message);
+                errorText.textContent = message;
+                errorMessage.classList.remove('hidden');
+            }
+
+            testButton.addEventListener('click', async () => {
+                hideAllMessages();
+                
+                try {
+                    console.log('Testing basic connection...');
+                    const response = await fetch('/test');
+                    console.log('Test response status:', response.status);
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        healthText.textContent = JSON.stringify(data, null, 2);
+                        healthStatus.classList.remove('hidden');
+                        healthStatus.className = 'mt-8 p-4 bg-green-100 border border-green-300 rounded-lg text-left';
+                    } else {
+                        throw new Error(`Test failed with status ${response.status}`);
+                    }
+                } catch (error) {
+                    console.error('Test error:', error);
+                    showError(`Basic connection test failed: ${error.message}`);
+                }
+            });
+
+            healthButton.addEventListener('click', async () => {
+                hideAllMessages();
+                
+                try {
+                    const response = await fetch('/health');
+                    const data = await response.json();
+                    
+                    healthText.textContent = JSON.stringify(data, null, 2);
+                    healthStatus.classList.remove('hidden');
+                    
+                    if (data.status === 'ok') {
+                        healthStatus.className = 'mt-8 p-4 bg-green-100 border border-green-300 rounded-lg text-left';
+                    } else {
+                        healthStatus.className = 'mt-8 p-4 bg-yellow-100 border border-yellow-300 rounded-lg text-left';
+                    }
+                } catch (error) {
+                    showError(`Health check failed: ${error.message}`);
+                }
+            });
+
+            generateButton.addEventListener('click', async () => {
+                hideAllMessages();
+                loadingIndicator.classList.remove('hidden');
 
                 try {
+                    console.log('Starting fetch request...');
                     const response = await fetch('/generate_podcast');
-
+                    
+                    console.log('Response received:', response.status, response.statusText);
+                    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+                    
                     if (!response.ok) {
-                        const errorData = await response.json();
-                        throw new Error(errorData.error || `Server responded with status: ${response.status}`);
+                        // Try to parse as JSON first
+                        let errorMessage;
+                        const contentType = response.headers.get('content-type');
+                        
+                        if (contentType && contentType.includes('application/json')) {
+                            try {
+                                const errorData = await response.json();
+                                errorMessage = errorData.error || `Server error: ${response.status}`;
+                            } catch (jsonError) {
+                                console.error('Failed to parse error JSON:', jsonError);
+                                errorMessage = `Server returned ${response.status}: ${response.statusText}`;
+                            }
+                        } else {
+                            // If it's not JSON, it's probably HTML
+                            const htmlText = await response.text();
+                            console.error('Received HTML instead of JSON:', htmlText.substring(0, 200));
+                            errorMessage = `Server returned HTML instead of JSON (Status: ${response.status}). This usually means there's a server-side error. Check the system status.`;
+                        }
+                        
+                        throw new Error(errorMessage);
                     }
 
+                    // Check if response is actually audio
+                    const contentType = response.headers.get('content-type');
+                    if (!contentType || !contentType.includes('audio')) {
+                        throw new Error(`Expected audio response but got: ${contentType}`);
+                    }
+
+                    console.log('Processing audio response...');
                     const audioBlob = await response.blob();
+                    console.log('Audio blob size:', audioBlob.size);
+                    
+                    if (audioBlob.size < 1000) {
+                        throw new Error('Audio file is too small, generation may have failed');
+                    }
+                    
                     const audioUrl = URL.createObjectURL(audioBlob);
                     audioPlayer.src = audioUrl;
                     playerContainer.classList.remove('hidden');
+                    
+                    console.log('Audio loaded successfully');
 
                 } catch (error) {
-                    errorText.textContent = error.message;
-                    errorMessage.classList.remove('hidden');
-                    console.error('Error:', error);
+                    showError(error.message);
                 } finally {
                     loadingIndicator.classList.add('hidden');
                 }

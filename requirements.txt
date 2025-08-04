@@ -1,6 +1,6 @@
-flask
-python-dotenv
-requests
-google-generativeai
-gunicorn
-google-genai
+flask==3.0.0
+python-dotenv==1.0.0
+requests==2.31.0
+google-generativeai==0.8.3
+google-genai==0.1.0
+gunicorn==21.2.0
