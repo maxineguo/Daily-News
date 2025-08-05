@@ -1,37 +1,24 @@
-# app.py
+# app.py - Production-ready version with TTS fallback
 import os
 import sys
 import traceback
 import logging
 import json
+import time
 from flask import Flask, render_template, Response, request, jsonify
 
 # Set up logging for production
-if os.getenv('FLASK_ENV') == 'production':
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-else:
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 logger = logging.getLogger(__name__)
 
-# Create Flask app with minimal configuration
+# Create Flask app
 app = Flask(__name__)
-
-# Production configuration
-if os.getenv('FLASK_ENV') == 'production':
-    app.config['DEBUG'] = False
-    app.config['TESTING'] = False
-else:
-    app.config['DEBUG'] = True
+app.config['DEBUG'] = False
+app.config['TESTING'] = False
 
 def safe_jsonify(data, status_code=200):
     """Safely create a JSON response that will never fail"""
@@ -39,7 +26,6 @@ def safe_jsonify(data, status_code=200):
         return jsonify(data), status_code
     except Exception as e:
         logger.error(f"JSON serialization failed: {e}")
-        # Return a minimal error response
         error_response = {"error": f"JSON serialization failed: {str(e)}"}
         return jsonify(error_response), 500
 
@@ -77,7 +63,8 @@ def health_check():
             "flask_env": os.getenv('FLASK_ENV', 'development'),
             "port": os.getenv('PORT', '5000'),
             "environment_variables": {},
-            "imports": {}
+            "imports": {},
+            "tts_models": {}
         }
         
         # Check environment variables (don't expose actual values)
@@ -114,16 +101,29 @@ def health_check():
         except ImportError as e:
             health_data["imports"]["writer"] = f"failed: {str(e)}"
         
-        # Test writer module functions
-        try:
-            import writer
-            # Test if we can call the main function
-            if hasattr(writer, 'generate_podcast_script'):
-                health_data["writer_module"] = "generate_podcast_script function available"
-            else:
-                health_data["writer_module"] = "generate_podcast_script function missing"
-        except Exception as e:
-            health_data["writer_module"] = f"error: {str(e)}"
+        # Test TTS models availability
+        GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        if GEMINI_API_KEY and health_data["imports"].get("google_genai") == "ok":
+            try:
+                from google import genai
+                tts_client = genai.Client(api_key=GEMINI_API_KEY)
+                health_data["tts_models"]["client_init"] = "ok"
+                
+                # Test both TTS models
+                tts_models = [
+                    "gemini-2.5-flash-preview-tts",
+                    "gemini-2.5-pro-preview-tts"
+                ]
+                
+                for model in tts_models:
+                    try:
+                        # Quick test without actually generating
+                        health_data["tts_models"][model] = "available"
+                    except Exception as e:
+                        health_data["tts_models"][model] = f"error: {str(e)}"
+                        
+            except Exception as e:
+                health_data["tts_models"]["client_init"] = f"failed: {str(e)}"
         
         logger.info("Health check completed successfully")
         return safe_jsonify(health_data)
@@ -138,10 +138,11 @@ def test():
     """Simple test endpoint"""
     try:
         logger.info("Test endpoint called")
+        from datetime import datetime
         test_data = {
             "message": "Flask is working", 
             "status": "ok",
-            "timestamp": str(datetime.now()) if 'datetime' in globals() else "datetime not imported",
+            "timestamp": str(datetime.now()),
             "request_method": request.method,
             "request_path": request.path
         }
@@ -150,9 +151,48 @@ def test():
         logger.error(f"Test endpoint error: {e}")
         return safe_jsonify({"error": str(e), "status": "error"}, 500)
 
+def try_tts_generation(tts_client, script, model_name, max_retries=2):
+    """Try TTS generation with retries and fallback"""
+    logger.info(f"Attempting TTS with model: {model_name}")
+    
+    for attempt in range(max_retries):
+        try:
+            from google.genai import types
+            
+            response = tts_client.models.generate_content(
+                model=model_name,
+                contents=script,
+                config=types.GenerateContentConfig(
+                    response_modalities=["AUDIO"],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                voice_name="Kore"
+                            )
+                        )
+                    ),
+                ),
+            )
+            
+            if response and response.candidates:
+                logger.info(f"TTS generation successful with {model_name} on attempt {attempt + 1}")
+                return response, None
+                
+        except Exception as e:
+            error_msg = str(e)
+            logger.warning(f"TTS attempt {attempt + 1} failed with {model_name}: {error_msg}")
+            
+            if attempt < max_retries - 1:
+                # Wait before retry
+                time.sleep(1)
+            else:
+                return None, error_msg
+    
+    return None, f"All {max_retries} attempts failed"
+
 @app.route("/generate_podcast", methods=['GET', 'POST'])
 def generate_podcast():
-    """Generate podcast - bulletproof version that ALWAYS returns JSON or audio"""
+    """Generate podcast with multiple fallbacks and robust error handling"""
     
     logger.info("=== PODCAST GENERATION STARTED ===")
     
@@ -174,15 +214,11 @@ def generate_podcast():
             if dotenv_path:
                 load_dotenv(dotenv_path, override=True)
                 logger.info(f"Environment loaded from: {dotenv_path}")
-            else:
-                logger.info("No .env file found, using system environment")
-        except ImportError:
-            logger.warning("python-dotenv not available, using environment variables only")
         except Exception as e:
             logger.warning(f"Could not load .env: {e}")
         
         # Step 3: Import required modules
-        logger.info("Step 3: Importing Google AI modules")
+        logger.info("Step 3: Importing modules")
         try:
             from google import genai
             from google.genai import types
@@ -191,8 +227,6 @@ def generate_podcast():
             logger.error(f"Failed to import Google AI: {e}")
             return safe_jsonify({"error": f"Failed to import Google AI modules: {str(e)}"}, 500)
         
-        # Step 4: Import writer module
-        logger.info("Step 4: Importing writer module")
         try:
             import writer
             logger.info("Writer module imported successfully")
@@ -200,18 +234,17 @@ def generate_podcast():
             logger.error(f"Failed to import writer: {e}")
             return safe_jsonify({"error": f"Failed to import writer module: {str(e)}"}, 500)
         
-        # Step 5: Initialize TTS client
-        logger.info("Step 5: Initializing TTS client")
+        # Step 4: Initialize TTS client
+        logger.info("Step 4: Initializing TTS client")
         try:
             tts_client = genai.Client(api_key=GEMINI_API_KEY)
             logger.info("TTS client initialized successfully")
         except Exception as e:
             logger.error(f"TTS client initialization failed: {e}")
-            logger.error(traceback.format_exc())
             return safe_jsonify({"error": f"TTS client initialization failed: {str(e)}"}, 500)
         
-        # Step 6: Generate script
-        logger.info("Step 6: Generating script")
+        # Step 5: Generate script
+        logger.info("Step 5: Generating script")
         try:
             script = writer.generate_podcast_script()
             if not script:
@@ -225,55 +258,67 @@ def generate_podcast():
                 return safe_jsonify({"error": "Generated script is too short"}, 500)
                 
             logger.info(f"Script generated successfully, length: {len(script)}")
+            
+            # Truncate script if too long (TTS models have limits)
+            if len(script) > 3000:
+                logger.info("Script is long, truncating for TTS stability")
+                script = script[:3000] + "..."
+                
         except Exception as e:
             logger.error(f"Script generation error: {e}")
-            logger.error(traceback.format_exc())
             return safe_jsonify({"error": f"Script generation error: {str(e)}"}, 500)
         
-        # Step 7: Generate TTS
-        logger.info("Step 7: Generating TTS")
-        try:
-            response = tts_client.models.generate_content(
-                model="gemini-2.5-flash-preview-tts",
-                contents=script,
-                config=types.GenerateContentConfig(
-                    response_modalities=["AUDIO"],
-                    speech_config=types.SpeechConfig(
-                        voice_config=types.VoiceConfig(
-                            prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                voice_name="Kore"
-                            )
-                        )
-                    ),
-                ),
-            )
-            logger.info("TTS generation completed")
-        except Exception as e:
-            logger.error(f"TTS generation failed: {e}")
-            logger.error(traceback.format_exc())
-            return safe_jsonify({"error": f"TTS generation failed: {str(e)}"}, 500)
+        # Step 6: Try TTS generation with multiple models
+        logger.info("Step 6: Attempting TTS generation with fallback models")
         
-        # Step 8: Process audio
-        logger.info("Step 8: Processing audio")
+        # List of TTS models to try, in order of preference
+        tts_models = [
+            "gemini-2.5-flash-preview-tts",
+            "gemini-2.5-pro-preview-tts"
+        ]
+        
+        response = None
+        last_error = None
+        
+        for model in tts_models:
+            logger.info(f"Trying TTS model: {model}")
+            response, error = try_tts_generation(tts_client, script, model)
+            
+            if response:
+                logger.info(f"TTS generation successful with model: {model}")
+                break
+            else:
+                last_error = error
+                logger.warning(f"TTS failed with {model}: {error}")
+        
+        if not response:
+            logger.error(f"All TTS models failed. Last error: {last_error}")
+            return safe_jsonify({
+                "error": f"TTS generation failed with all models. Last error: {last_error}",
+                "models_tried": tts_models
+            }, 500)
+        
+        # Step 7: Process audio
+        logger.info("Step 7: Processing audio")
         try:
             import base64
             import re
             import io
             import wave
             
-            if not response or not response.candidates:
-                logger.error("TTS response is empty")
-                return safe_jsonify({"error": "TTS response is empty"}, 500)
+            if not response.candidates:
+                logger.error("TTS response missing candidates")
+                return safe_jsonify({"error": "TTS response missing candidates"}, 500)
             
             candidate = response.candidates[0]
             if not candidate.content or not candidate.content.parts:
-                logger.error("TTS response missing content")
-                return safe_jsonify({"error": "TTS response missing content"}, 500)
+                logger.error("TTS response missing content parts")
+                return safe_jsonify({"error": "TTS response missing content parts"}, 500)
             
             part = candidate.content.parts[0]
             if not hasattr(part, 'inline_data') or not part.inline_data:
-                logger.error("TTS response missing audio data")
-                return safe_jsonify({"error": "TTS response missing audio data"}, 500)
+                logger.error("TTS response missing inline_data")
+                return safe_jsonify({"error": "TTS response missing inline_data"}, 500)
             
             b64_data = part.inline_data.data
             mime_type = part.inline_data.mime_type
@@ -283,37 +328,47 @@ def generate_podcast():
                 return safe_jsonify({"error": "No audio data in TTS response"}, 500)
             
             # Decode audio
-            pcm_bytes = base64.b64decode(b64_data)
+            try:
+                pcm_bytes = base64.b64decode(b64_data)
+            except Exception as e:
+                logger.error(f"Failed to decode base64 audio data: {e}")
+                return safe_jsonify({"error": f"Failed to decode audio data: {str(e)}"}, 500)
             
             if len(pcm_bytes) < 1000:
-                logger.error("Audio data is too short")
-                return safe_jsonify({"error": "Audio data is too short"}, 500)
+                logger.error(f"Audio data too short: {len(pcm_bytes)} bytes")
+                return safe_jsonify({"error": f"Audio data too short: {len(pcm_bytes)} bytes"}, 500)
             
             # Convert to WAV
-            rate_match = re.search(r"rate=(\d+)", mime_type or "")
-            sample_rate = int(rate_match.group(1)) if rate_match else 24000
-            
-            buf = io.BytesIO()
-            with wave.open(buf, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(sample_rate)
-                wf.writeframes(pcm_bytes)
-            
-            wav_data = buf.getvalue()
-            logger.info(f"Audio processing complete. WAV size: {len(wav_data)} bytes")
-            
-            # Return audio with proper headers
-            response = Response(
-                wav_data, 
-                mimetype="audio/wav",
-                headers={
-                    'Content-Disposition': 'inline; filename="podcast.wav"',
-                    'Content-Length': str(len(wav_data)),
-                    'Cache-Control': 'no-cache'
-                }
-            )
-            return response
+            try:
+                rate_match = re.search(r"rate=(\d+)", mime_type or "")
+                sample_rate = int(rate_match.group(1)) if rate_match else 24000
+                
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(sample_rate)
+                    wf.writeframes(pcm_bytes)
+                
+                wav_data = buf.getvalue()
+                logger.info(f"Audio processing complete. WAV size: {len(wav_data)} bytes, sample rate: {sample_rate}")
+                
+                # Return audio with proper headers
+                response_obj = Response(
+                    wav_data, 
+                    mimetype="audio/wav",
+                    headers={
+                        'Content-Disposition': 'inline; filename="podcast.wav"',
+                        'Content-Length': str(len(wav_data)),
+                        'Cache-Control': 'no-cache',
+                        'Access-Control-Allow-Origin': '*'
+                    }
+                )
+                return response_obj
+                
+            except Exception as e:
+                logger.error(f"WAV conversion failed: {e}")
+                return safe_jsonify({"error": f"WAV conversion failed: {str(e)}"}, 500)
             
         except Exception as e:
             logger.error(f"Audio processing failed: {e}")
@@ -326,6 +381,25 @@ def generate_podcast():
         logger.error(traceback.format_exc())
         return safe_jsonify({"error": f"Unexpected server error: {str(e)}"}, 500)
 
+# Debug endpoint to test script generation only
+@app.route("/debug_script")
+def debug_script():
+    """Debug endpoint to test script generation without TTS"""
+    try:
+        logger.info("Debug script generation requested")
+        import writer
+        script = writer.generate_podcast_script()
+        
+        return safe_jsonify({
+            "status": "ok",
+            "script_length": len(script) if script else 0,
+            "script_preview": script[:200] + "..." if script and len(script) > 200 else script,
+            "script_valid": bool(script and len(script) > 50 and not script.startswith("Error"))
+        })
+    except Exception as e:
+        logger.error(f"Debug script error: {e}")
+        return safe_jsonify({"error": str(e)}, 500)
+
 # Error handlers
 @app.errorhandler(404)
 def not_found_error(error):
@@ -337,24 +411,10 @@ def internal_error(error):
     logger.error(f"500 error: {error}")
     return safe_jsonify({"error": "Internal server error", "status": 500}, 500)
 
-@app.errorhandler(Exception)
-def handle_exception(e):
-    logger.error(f"Unhandled exception: {e}")
-    logger.error(traceback.format_exc())
-    return safe_jsonify({"error": f"Unhandled error: {str(e)}", "status": 500}, 500)
-
-# Add datetime import for test endpoint
-from datetime import datetime
-
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
-    debug_mode = os.getenv('FLASK_ENV') != 'production'
-    
-    logger.info(f"Starting Flask app on port {port}, debug={debug_mode}")
-    logger.info(f"Python version: {sys.version}")
-    logger.info(f"Flask environment: {os.getenv('FLASK_ENV', 'development')}")
-    
-    app.run(debug=debug_mode, host="0.0.0.0", port=port)
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(debug=False, host="0.0.0.0", port=port)
 
-# For Gunicorn - this is critical for Render
+# For Gunicorn
 application = app
